@@ -22,6 +22,7 @@ mecab = MeCab.Tagger("-Owakati")
 
 SOS_token = 0
 EOS_token = 1
+OOV_tokne = 2
 
 
 def lower_text(text):
@@ -33,7 +34,7 @@ class Lang:
         self.name = name
         self.word2index = {}
         self.word2count = {}
-        self.index2word = {0: "SOS", 1: "EOS"}
+        self.index2word = {0: "SOS", 1: "EOS", 2: "OOV"}
         self.n_words = 2
 
     def addSentence(self, sentence):
@@ -53,7 +54,7 @@ class Lang:
 
 def readLangs(lang1, lang2):
     print("Reading lines...")
-    lines = open('data/%s-%s.css' % (lang1, lang2), encoding='utf-8').\
+    lines = open('data/%s-%s.csv' % (lang1, lang2), encoding='utf-8').\
         read().strip().split('\n')
 
     pairs = [[s for s in l.split(',')] for l in lines]
@@ -166,7 +167,13 @@ class AttnDecoderRNN(nn.Module):
 
 def indexesFromSentence(lang, sentence):
     sentence = mecab.parse(sentence)
-    return [lang.word2index[mojimoji.zen_to_han(lower_text(word))] for word in sentence.split(' ')]
+    r = []
+    for word in sentence.split(' '):
+        if mojimoji.zen_to_han(lower_text(word)) in lang.word2index:
+            r.append(lang.word2index[mojimoji.zen_to_han(lower_text(word))])
+        else:
+            r.append(lang.word2index[lang.index2word[2]])
+    return r
 
 
 def tensorFromSentence(lang, sentence):
@@ -285,7 +292,8 @@ def trainIters(encoder, decoder, n_iters, print_every=1000, plot_every=100, lear
                       for i in range(n_iters)]
     criterion = nn.NLLLoss()
 
-    for iter in tqdm.tqdm(range(1, n_iters + 1)):
+    # for iter in tqdm.tqdm(range(1, n_iters + 1)):
+    for iter in tqdm.tqdm(range(1, 10)):
         training_pair = training_pairs[iter - 1]
         input_tensor = training_pair[0]
         target_tensor = training_pair[1]
@@ -320,7 +328,10 @@ def evaluate(encoder, decoder, sentence, max_length=MAX_LENGTH):
         for ei in range(input_length):
             encoder_output, encoder_hidden = encoder(input_tensor[ei],
                                                      encoder_hidden)
-            encoder_outputs[ei] += encoder_output[0, 0]
+            try:
+                encoder_outputs[ei] += encoder_output[0, 0]
+            except:
+                continue
 
         decoder_input = torch.tensor([[SOS_token]], device=device)  # SOS
 
@@ -337,6 +348,8 @@ def evaluate(encoder, decoder, sentence, max_length=MAX_LENGTH):
             if topi.item() == EOS_token:
                 decoded_words.append('<eos>')
                 break
+            elif topi.item() == OOV_tokne:
+                decoded_words.append('<oov>')
             else:
                 decoded_words.append(output_lang.index2word[topi.item()])
 
@@ -364,3 +377,14 @@ encoder1 = EncoderRNN(input_lang.n_words, hidden_size).to(device)
 attn_decoder1 = AttnDecoderRNN(hidden_size, output_lang.n_words, dropout_p=0.1).to(device)
 
 trainIters(encoder1, attn_decoder1, 75000, print_every=5000)
+
+import csv
+
+with open('data/difficult-easy-correct.csv', 'r') as f:
+    reader = csv.reader(f)
+    for line in reader:
+        result, attn = evaluate(encoder1, attn_decoder1, line[0])
+        print('-----')
+        print('原文', line[0])
+        print('正解', line[1])
+        print('出力', result)
